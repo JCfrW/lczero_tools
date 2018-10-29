@@ -2,6 +2,6 @@
 
 from lcztools._leela_board import LeelaBoard
 from lcztools.backend import load_network, LeelaNet, list_backends
-from . import testing, backend
-
+#from . import testing, backend
+from . import backend
 
