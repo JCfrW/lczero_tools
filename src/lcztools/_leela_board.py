@@ -3,6 +3,7 @@ import numpy as np
 import chess
 import struct
 from lcztools._uci_to_idx import uci_to_idx as _uci_to_idx
+import zlib
 
 flat_planes = []
 for i in range(256):
@@ -27,7 +28,7 @@ class LeelaBoard:
         '''If leela_board is passed as an argument, return a copy'''
         if leela_board:
             # Copy
-            self.pc_board = leela_board.pc_board.copy()
+            self.pc_board = leela_board.pc_board.copy(stack=False)
             self.lcz_stack = leela_board.lcz_stack[:]
             self._lcz_transposition_counter = leela_board._lcz_transposition_counter.copy()
         else:
@@ -38,8 +39,9 @@ class LeelaBoard:
         self.is_game_over = self.pc_method('is_game_over')
         self.can_claim_draw = self.pc_method('can_claim_draw')
         self.generate_legal_moves = self.pc_method('generate_legal_moves')
-
+                
     def copy(self):
+        """Note! Currently the copy constructor uses pc_board.copy(stack=False), which makes pops impossible"""
         return self.__class__(leela_board=self)
 
     def pc_method(self, methodname):
@@ -210,6 +212,31 @@ class LeelaBoard:
         uci_to_idx_index = (data.us_ooo | data.us_oo) +  2*data.side_to_move
         uci_idx_dct = _uci_to_idx[uci_to_idx_index]
         return [uci_idx_dct[m] for m in uci_list]
+    
+    @classmethod
+    def compress_features(cls, features):
+        """Compress a features array as returned from lcz_features method"""
+        features_8 = features.astype(np.uint8)
+        # Simple compression would do this...
+        # return zlib.compress(features_8)
+        piece_plane_bytes = np.packbits(features_8[:-8]).tobytes()
+        scalar_bytes = features_8[-8:][:,0,0].tobytes()
+        compressed = zlib.compress(piece_plane_bytes + scalar_bytes)
+        return compressed
+    
+    @classmethod
+    def decompress_features(cls, compressed_features):
+        """Decompress a compressed features array from compress_features"""
+        decompressed = zlib.decompress(compressed_features)
+        # Simple decompression would do this
+        # return np.frombuffer(decompressed, dtype=np.uint8).astype(np.float32).reshape(-1,8,8)
+        piece_plane_bytes = decompressed[:-8]
+        scalar_bytes = decompressed[-8:]
+        piece_plane_arr = np.unpackbits(bytearray(piece_plane_bytes))
+        scalar_arr = np.frombuffer(scalar_bytes, dtype=np.uint8).repeat(64)
+        result = np.concatenate((piece_plane_arr, scalar_arr)).astype(np.float32).reshape(-1,8,8)
+        return result    
+    
 
     def __repr__(self):
         return "LeelaBoard('{}')".format(self.pc_board.fen())
@@ -221,6 +248,19 @@ class LeelaBoard:
         boardstr = self.pc_board.__str__() + \
                 '\nTurn: {}'.format('White' if self.pc_board.turn else 'Black')
         return boardstr
+    
+    def __eq__(self, other):
+        return self.get_hash_key() == other.get_hash_key()
+    
+    def __hash__(self):
+        return hash(self.get_hash_key())
+
+    def get_hash_key(self):
+        transposition_key = self.pc_board._transposition_key() 
+        return (transposition_key +
+                (self._lcz_transposition_counter[transposition_key], self.pc_board.halfmove_clock) +
+                tuple(self.pc_board.move_stack[-8:])
+                )
 
 # lb = LeelaBoard()
 # lb.push_uci('c2c4')
